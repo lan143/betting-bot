@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"main/src"
+	"math/rand"
+	"time"
 )
 
 func main() {
+	rand.Seed(time.Now().UTC().UnixNano())
+
 	container := src.BuildContainer()
 	err := container.Invoke(func(a *src.Application) {
 		ctx := context.Background()

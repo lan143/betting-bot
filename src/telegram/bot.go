@@ -3,8 +3,10 @@ package telegram
 import (
 	"context"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/google/uuid"
 	"log"
 	"main/src/roulette"
+	"strings"
 	"sync"
 )
 
@@ -105,6 +107,24 @@ func (b *Bot) handleMessage(message *tgbotapi.Message) {
 
 func (b *Bot) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	log.Printf("[%s] %+v", callback.From.UserName, callback.Data)
+
+	data := strings.Split(callback.Data, ";")
+	log.Printf("data: %+v", data)
+
+	if len(data) > 0 {
+		switch data[0] {
+		case "roulette-selections":
+			id, err := uuid.Parse(data[1])
+			if err != nil {
+				log.Printf(err.Error())
+			} else {
+				b.rouletteController.PlaceBet(id, callback, data[2])
+			}
+			break
+		default:
+			log.Printf("unsupported %s", data[0])
+		}
+	}
 }
 
 func (b *Bot) newRoulette(chatId int64) {

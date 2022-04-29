@@ -1,6 +1,9 @@
 package roulette
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+	"math/rand"
+)
 
 type Color string
 
@@ -15,7 +18,7 @@ type Number struct {
 	Color Color
 }
 
-type Bet struct {
+type Selection struct {
 	Name string
 	Data string
 }
@@ -24,17 +27,38 @@ type Roulette struct {
 	numbers []Number
 }
 
-func (r *Roulette) GetSingleBets(id uuid.UUID) []Bet {
-	var bets []Bet
+func (r *Roulette) GetSingleSelections(id uuid.UUID) []Selection {
+	var selections []Selection
 
 	for _, number := range r.numbers {
-		bets = append(bets, Bet{
+		selections = append(selections, Selection{
 			Name: number.Num + " - " + string(number.Color),
-			Data: "roulette-bets;" + id.String() + ";" + number.Num + "-" + string(number.Color),
+			Data: "roulette-selections;" + id.String() + ";" + number.Num,
 		})
 	}
 
-	return bets
+	return selections
+}
+
+func (r *Roulette) GetMultipleSelections(id uuid.UUID) []Selection {
+	var selections = []Selection{
+		{
+			Name: "Black",
+			Data: "roulette-selections;" + id.String() + ";Black",
+		},
+		{
+			Name: "Red",
+			Data: "roulette-selections;" + id.String() + ";Red",
+		},
+	}
+
+	return selections
+}
+
+func (r *Roulette) Generate() Number {
+	winIndex := rand.Intn(len(r.numbers))
+
+	return r.numbers[winIndex]
 }
 
 func NewRoulette() *Roulette {
