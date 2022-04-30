@@ -22,7 +22,7 @@ func (r *InMemoryUsersRepository) GetUserByExternalId(id int64, chatId int64) (*
 func (r *InMemoryUsersRepository) UpdateBalance(user *entities.User, amount uint) error {
 	user.Balance += amount
 
-	return nil
+	return r.Save(user)
 }
 
 func (r *InMemoryUsersRepository) Save(user *entities.User) error {

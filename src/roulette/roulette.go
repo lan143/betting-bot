@@ -25,6 +25,8 @@ type Selection struct {
 
 type Roulette struct {
 	numbers []Number
+
+	winNumber *Number
 }
 
 func (r *Roulette) GetSingleSelections(id uuid.UUID) []Selection {
@@ -55,10 +57,38 @@ func (r *Roulette) GetMultipleSelections(id uuid.UUID) []Selection {
 	return selections
 }
 
-func (r *Roulette) Generate() Number {
-	winIndex := rand.Intn(len(r.numbers))
+func (r *Roulette) EndRoulette() Number {
+	if r.winNumber != nil {
+		return *r.winNumber
+	}
 
-	return r.numbers[winIndex]
+	winIndex := rand.Intn(len(r.numbers))
+	r.winNumber = &r.numbers[winIndex]
+
+	return *r.winNumber
+}
+
+func (r *Roulette) GetBetWin(bet *UserBet) uint {
+	switch bet.Selection {
+	case "Black":
+		if r.winNumber.Color == Black {
+			return bet.Amount * 2
+		} else {
+			return 0
+		}
+	case "Red":
+		if r.winNumber.Color == Red {
+			return bet.Amount * 2
+		} else {
+			return 0
+		}
+	default:
+		if bet.Selection == r.winNumber.Num {
+			return bet.Amount * 36
+		} else {
+			return 0
+		}
+	}
 }
 
 func NewRoulette() *Roulette {

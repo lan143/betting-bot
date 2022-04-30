@@ -136,11 +136,6 @@ func (g *Game) PlaceBet(userId int64, userName string, selection string, stake f
 		log.Printf("game.place-bet.update-balance: %s", err.Error())
 		return errors.New("bot error: can't place bet")
 	}
-	err = g.usersRepository.Save(user)
-	if err != nil {
-		log.Printf("game.place-bet.save: %s", err.Error())
-		return errors.New("bot error: can't place bet")
-	}
 
 	g.bets = append(g.bets, UserBet{
 		User:      user,
@@ -236,111 +231,39 @@ func (g *Game) sendMultipleSelections() int {
 }
 
 func (g *Game) generateAndSettle() {
-	number := g.roulette.Generate()
+	number := g.roulette.EndRoulette()
 
 	message := strings.Builder{}
 	message.WriteString(fmt.Sprintf("Roulette is complete! Victory: %s %s\n\n", number.Num, number.Color))
 
 	for _, bet := range g.bets {
-		switch bet.Selection {
-		case "Black":
-			if number.Color == "Black" {
-				winAmount := bet.Amount * 2
-				err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
-				if err != nil {
-					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
-					break
-				}
-				err = g.usersRepository.Save(bet.User)
-				if err != nil {
-					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
-					break
-				}
-
-				message.WriteString(
-					fmt.Sprintf(
-						"✌️ @%s win %.2f parrots. Balance: %.2f parrots.\n",
-						bet.User.UserName,
-						float64(winAmount)/100,
-						float64(bet.User.Balance)/100,
-					),
-				)
-			} else {
-				message.WriteString(
-					fmt.Sprintf(
-						"😥️ @%s lose %.2f parrots. Balance: %.2f parrots.\n",
-						bet.User.UserName,
-						float64(bet.Amount)/100,
-						float64(bet.User.Balance)/100,
-					),
-				)
+		winAmount := g.roulette.GetBetWin(&bet)
+		if winAmount > 0 {
+			err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
+			if err != nil {
+				log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+				break
 			}
-			break
-		case "Red":
-			if number.Color == "Red" {
-				winAmount := bet.Amount * 2
-				err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
-				if err != nil {
-					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
-					break
-				}
-				err = g.usersRepository.Save(bet.User)
-				if err != nil {
-					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
-					break
-				}
 
-				message.WriteString(
-					fmt.Sprintf(
-						"✌️ @%s win %.2f parrots. Balance: %.2f parrots.\n",
-						bet.User.UserName,
-						float64(winAmount)/100,
-						float64(bet.User.Balance)/100,
-					),
-				)
-			} else {
-				message.WriteString(
-					fmt.Sprintf(
-						"😥️ @%s lose %.2f parrots. Balance: %.2f parrots.\n",
-						bet.User.UserName,
-						float64(bet.Amount)/100,
-						float64(bet.User.Balance)/100,
-					),
-				)
-			}
-			break
-		default:
-			if bet.Selection == number.Num {
-				winAmount := bet.Amount * 36
-				err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
-				if err != nil {
-					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
-					break
-				}
-				err = g.usersRepository.Save(bet.User)
-				if err != nil {
-					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
-					break
-				}
-
-				message.WriteString(
-					fmt.Sprintf(
-						"✌️ @%s win %.2f parrots. Balance: %.2f parrots.\n",
-						bet.User.UserName,
-						float64(winAmount)/100,
-						float64(bet.User.Balance)/100,
-					),
-				)
-			} else {
-				message.WriteString(
-					fmt.Sprintf(
-						"😥️ @%s lose %.2f parrots. Balance: %.2f parrots.\n",
-						bet.User.UserName,
-						float64(bet.Amount)/100,
-						float64(bet.User.Balance)/100,
-					),
-				)
-			}
+			message.WriteString(
+				fmt.Sprintf(
+					"✌️ @%s bet on %s and win %.2f parrots. Balance: %.2f parrots.\n",
+					bet.User.UserName,
+					bet.Selection,
+					float64(winAmount)/100,
+					float64(bet.User.Balance)/100,
+				),
+			)
+		} else {
+			message.WriteString(
+				fmt.Sprintf(
+					"😥️ @%s bet on %s and lose %.2f parrots. Balance: %.2f parrots.\n",
+					bet.User.UserName,
+					bet.Selection,
+					float64(bet.Amount)/100,
+					float64(bet.User.Balance)/100,
+				),
+			)
 		}
 	}
 
