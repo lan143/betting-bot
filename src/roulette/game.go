@@ -28,7 +28,9 @@ type Game struct {
 	roulette *Roulette
 
 	bets                       []UserBet
-	messagesForDeleteInTwoStep []int
+	messagesWithSelections     []int
+	messageWithInformation     int
+	messageWithInformationText string
 }
 
 func (g *Game) GetId() uuid.UUID {
@@ -48,13 +50,24 @@ func (g *Game) Run() {
 	for {
 		switch g.step {
 		case 1: // send messages with make bets
-			g.messagesForDeleteInTwoStep = g.sendGameMessage()
+			g.messagesWithSelections = g.sendGameMessage()
+
+			g.messageWithInformationText = "Place your bets gentlemen\n\n"
+			msg := tgbotapi.NewMessage(g.chatId, g.messageWithInformationText)
+			send, err := g.api.Send(msg)
+			if err != nil {
+				log.Printf("roulette.send-game-message.send: %s", err.Error())
+				return
+			} else {
+				g.messageWithInformation = send.MessageID
+			}
+
 			g.step = 2
 			break
 		case 2: // wait 20 seconds for user bets
 			timer := time.NewTimer(20 * time.Second)
 			<-timer.C
-			for _, id := range g.messagesForDeleteInTwoStep {
+			for _, id := range g.messagesWithSelections {
 				msg := tgbotapi.NewDeleteMessage(g.chatId, id)
 				_, err := g.api.Send(msg)
 				if err != nil {
@@ -62,19 +75,19 @@ func (g *Game) Run() {
 				}
 			}
 
-			msg := tgbotapi.NewMessage(g.chatId, "Bets are made, no more bets")
-			_, err := g.api.Send(msg)
-			if err != nil {
-				log.Printf(err.Error())
-			}
 			g.step = 3
 			break
 		case 3: // generate win number and settle bets
-			msg := tgbotapi.NewMessage(g.chatId, "Roulette ends up moving...")
+			msg := tgbotapi.NewEditMessageText(
+				g.GetChatId(),
+				g.messageWithInformation,
+				"Bets are made, no more bets. Roulette ends up moving...",
+			)
 			_, err := g.api.Send(msg)
 			if err != nil {
-				log.Printf(err.Error())
+				log.Printf("game.place-bet.send: %s", err.Error())
 			}
+
 			timer := time.NewTimer(3 * time.Second)
 			<-timer.C
 			g.generateAndSettle()
@@ -135,14 +148,17 @@ func (g *Game) PlaceBet(userId int64, userName string, selection string, stake f
 		Amount:    stakeInCents,
 	})
 
-	msg := tgbotapi.NewMessage(
+	g.messageWithInformationText = g.messageWithInformationText + fmt.Sprintf(
+		"%s placed bet on %s. Balance: %.2f parrots\n",
+		user.UserName,
+		selection,
+		float64(user.Balance)/100,
+	)
+
+	msg := tgbotapi.NewEditMessageText(
 		g.GetChatId(),
-		fmt.Sprintf(
-			"%s placed bet on %s. Balance: %.2f parrots",
-			user.UserName,
-			selection,
-			float64(user.Balance)/100,
-		),
+		g.messageWithInformation,
+		g.messageWithInformationText,
 	)
 	_, err = g.api.Send(msg)
 	if err != nil {
@@ -153,15 +169,8 @@ func (g *Game) PlaceBet(userId int64, userName string, selection string, stake f
 }
 
 func (g *Game) sendGameMessage() []int {
-	var err error
 	var messageIds []int
 	messageIds = append(messageIds, g.sendSingleSelections(), g.sendMultipleSelections())
-
-	msg := tgbotapi.NewMessage(g.chatId, "Place your bets gentlemen")
-	_, err = g.api.Send(msg)
-	if err != nil {
-		log.Printf("roulette.send-game-message.send: %s", err.Error())
-	}
 
 	return messageIds
 }
@@ -229,13 +238,8 @@ func (g *Game) sendMultipleSelections() int {
 func (g *Game) generateAndSettle() {
 	number := g.roulette.Generate()
 
-	msg := tgbotapi.NewMessage(g.chatId, fmt.Sprintf("Roulette is complete! Win: %s %s", number.Num, number.Color))
-	_, err := g.api.Send(msg)
-	if err != nil {
-		log.Printf("roulette.send-game-message.send: %s", err.Error())
-	}
-
 	message := strings.Builder{}
+	message.WriteString(fmt.Sprintf("Roulette is complete! Victory: %s %s\n\n", number.Num, number.Color))
 
 	for _, bet := range g.bets {
 		switch bet.Selection {
@@ -340,19 +344,14 @@ func (g *Game) generateAndSettle() {
 		}
 	}
 
-	text := message.String()
-	if len(text) == 0 {
-		text = "No bets"
-	}
-
-	_, err = g.api.Send(
-		tgbotapi.NewMessage(
-			g.chatId,
-			text,
-		),
+	msg := tgbotapi.NewEditMessageText(
+		g.GetChatId(),
+		g.messageWithInformation,
+		message.String(),
 	)
+	_, err := g.api.Send(msg)
 	if err != nil {
-		log.Printf("roulette.send-game-message.send: %s", err.Error())
+		log.Printf("game.place-bet.send: %s", err.Error())
 	}
 }
 
