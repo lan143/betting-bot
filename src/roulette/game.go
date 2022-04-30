@@ -6,27 +6,29 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
 	"log"
+	"main/src/entities"
+	"main/src/repositories"
 	"strings"
 	"time"
 )
 
 type UserBet struct {
-	UserId    int64
-	UserName  string
+	User      *entities.User
 	Selection string
-	Amount    float64
+	Amount    uint
 }
 
 type Game struct {
-	api  *tgbotapi.BotAPI
-	step uint8
+	api             *tgbotapi.BotAPI
+	usersRepository repositories.UsersRepository
 
 	id       uuid.UUID
 	chatId   int64
+	step     uint8
 	roulette *Roulette
 
-	bets         []UserBet
-	stakeMessage tgbotapi.Message
+	bets                       []UserBet
+	messagesForDeleteInTwoStep []int
 }
 
 func (g *Game) GetId() uuid.UUID {
@@ -46,13 +48,21 @@ func (g *Game) Run() {
 	for {
 		switch g.step {
 		case 1: // send messages with make bets
-			g.sendGameMessage()
+			g.messagesForDeleteInTwoStep = g.sendGameMessage()
 			g.step = 2
 			break
-		case 2: // wait 2 minutes for user bets
+		case 2: // wait 20 seconds for user bets
 			timer := time.NewTimer(20 * time.Second)
 			<-timer.C
-			msg := tgbotapi.NewEditMessageText(g.chatId, g.stakeMessage.MessageID, "Bets are made, no more bets")
+			for _, id := range g.messagesForDeleteInTwoStep {
+				msg := tgbotapi.NewDeleteMessage(g.chatId, id)
+				_, err := g.api.Send(msg)
+				if err != nil {
+					log.Printf(err.Error())
+				}
+			}
+
+			msg := tgbotapi.NewMessage(g.chatId, "Bets are made, no more bets")
 			_, err := g.api.Send(msg)
 			if err != nil {
 				log.Printf(err.Error())
@@ -60,6 +70,13 @@ func (g *Game) Run() {
 			g.step = 3
 			break
 		case 3: // generate win number and settle bets
+			msg := tgbotapi.NewMessage(g.chatId, "Roulette ends up moving...")
+			_, err := g.api.Send(msg)
+			if err != nil {
+				log.Printf(err.Error())
+			}
+			timer := time.NewTimer(3 * time.Second)
+			<-timer.C
 			g.generateAndSettle()
 			g.step = 4
 			break
@@ -69,34 +86,87 @@ func (g *Game) Run() {
 	}
 }
 
-func (g *Game) PlaceBet(userId int64, userName string, selection string) error {
+func (g *Game) PlaceBet(userId int64, userName string, selection string, stake float64) error {
 	if g.step != 2 {
 		return errors.New("time for place bets is out")
 	}
 
+	user, err := g.usersRepository.GetUserByExternalId(userId, g.chatId)
+	if err != nil {
+		log.Printf("game.place-bet.get-user: %s", err.Error())
+		return errors.New("bot error: can't place bet")
+	}
+
+	if user == nil {
+		user = &entities.User{
+			Id:             uuid.New(),
+			ExternalId:     userId,
+			ExternalChatId: g.chatId,
+			UserName:       userName,
+			Balance:        100 * 100,
+		}
+		err := g.usersRepository.Save(user)
+		if err != nil {
+			log.Printf("game.place-bet.save-user: %s", err.Error())
+			return errors.New("bot error: can't place bet")
+		}
+	}
+
+	stakeInCents := uint(stake * 100)
+
+	if user.Balance < stakeInCents {
+		return errors.New("not enough money")
+	}
+
+	err = g.usersRepository.UpdateBalance(user, -stakeInCents)
+	if err != nil {
+		log.Printf("game.place-bet.update-balance: %s", err.Error())
+		return errors.New("bot error: can't place bet")
+	}
+	err = g.usersRepository.Save(user)
+	if err != nil {
+		log.Printf("game.place-bet.save: %s", err.Error())
+		return errors.New("bot error: can't place bet")
+	}
+
 	g.bets = append(g.bets, UserBet{
-		UserId:    userId,
-		UserName:  userName,
+		User:      user,
 		Selection: selection,
-		Amount:    5.0,
+		Amount:    stakeInCents,
 	})
+
+	msg := tgbotapi.NewMessage(
+		g.GetChatId(),
+		fmt.Sprintf(
+			"%s placed bet on %s. Balance: %.2f parrots",
+			user.UserName,
+			selection,
+			float64(user.Balance)/100,
+		),
+	)
+	_, err = g.api.Send(msg)
+	if err != nil {
+		log.Printf("game.place-bet.send: %s", err.Error())
+	}
 
 	return nil
 }
 
-func (g *Game) sendGameMessage() {
+func (g *Game) sendGameMessage() []int {
 	var err error
-	g.sendSingleSelections()
-	g.sendMultipleSelections()
+	var messageIds []int
+	messageIds = append(messageIds, g.sendSingleSelections(), g.sendMultipleSelections())
 
 	msg := tgbotapi.NewMessage(g.chatId, "Place your bets gentlemen")
-	g.stakeMessage, err = g.api.Send(msg)
+	_, err = g.api.Send(msg)
 	if err != nil {
 		log.Printf("roulette.send-game-message.send: %s", err.Error())
 	}
+
+	return messageIds
 }
 
-func (g *Game) sendSingleSelections() {
+func (g *Game) sendSingleSelections() int {
 	var keyboard = tgbotapi.NewInlineKeyboardMarkup()
 	var row = tgbotapi.NewInlineKeyboardRow()
 
@@ -121,13 +191,15 @@ func (g *Game) sendSingleSelections() {
 
 	msg := tgbotapi.NewMessage(g.chatId, "Make your single bets")
 	msg.ReplyMarkup = keyboard
-	_, err := g.api.Send(msg)
+	send, err := g.api.Send(msg)
 	if err != nil {
 		log.Printf("roulette.send-game-message.send: %s", err.Error())
 	}
+
+	return send.MessageID
 }
 
-func (g *Game) sendMultipleSelections() {
+func (g *Game) sendMultipleSelections() int {
 	var keyboard = tgbotapi.NewInlineKeyboardMarkup()
 	var row []tgbotapi.InlineKeyboardButton
 
@@ -146,10 +218,12 @@ func (g *Game) sendMultipleSelections() {
 
 	msg := tgbotapi.NewMessage(g.chatId, "Or make your multiple bets")
 	msg.ReplyMarkup = keyboard
-	_, err := g.api.Send(msg)
+	send, err := g.api.Send(msg)
 	if err != nil {
 		log.Printf("roulette.send-game-message.send: %s", err.Error())
 	}
+
+	return send.MessageID
 }
 
 func (g *Game) generateAndSettle() {
@@ -167,23 +241,101 @@ func (g *Game) generateAndSettle() {
 		switch bet.Selection {
 		case "Black":
 			if number.Color == "Black" {
-				message.WriteString(fmt.Sprintf("@%s win %f parrots\n", bet.UserName, bet.Amount*2))
+				winAmount := bet.Amount * 2
+				err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
+				if err != nil {
+					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+					break
+				}
+				err = g.usersRepository.Save(bet.User)
+				if err != nil {
+					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+					break
+				}
+
+				message.WriteString(
+					fmt.Sprintf(
+						"✌️ @%s win %.2f parrots. Balance: %.2f parrots.\n",
+						bet.User.UserName,
+						float64(winAmount)/100,
+						float64(bet.User.Balance)/100,
+					),
+				)
 			} else {
-				message.WriteString(fmt.Sprintf("@%s lose %f parrots\n", bet.UserName, bet.Amount))
+				message.WriteString(
+					fmt.Sprintf(
+						"😥️ @%s lose %.2f parrots. Balance: %.2f parrots.\n",
+						bet.User.UserName,
+						float64(bet.Amount)/100,
+						float64(bet.User.Balance)/100,
+					),
+				)
 			}
 			break
 		case "Red":
 			if number.Color == "Red" {
-				message.WriteString(fmt.Sprintf("@%s win %f parrots\n", bet.UserName, bet.Amount*2))
+				winAmount := bet.Amount * 2
+				err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
+				if err != nil {
+					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+					break
+				}
+				err = g.usersRepository.Save(bet.User)
+				if err != nil {
+					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+					break
+				}
+
+				message.WriteString(
+					fmt.Sprintf(
+						"✌️ @%s win %.2f parrots. Balance: %.2f parrots.\n",
+						bet.User.UserName,
+						float64(winAmount)/100,
+						float64(bet.User.Balance)/100,
+					),
+				)
 			} else {
-				message.WriteString(fmt.Sprintf("@%s lose %f parrots\n", bet.UserName, bet.Amount))
+				message.WriteString(
+					fmt.Sprintf(
+						"😥️ @%s lose %.2f parrots. Balance: %.2f parrots.\n",
+						bet.User.UserName,
+						float64(bet.Amount)/100,
+						float64(bet.User.Balance)/100,
+					),
+				)
 			}
 			break
 		default:
 			if bet.Selection == number.Num {
-				message.WriteString(fmt.Sprintf("@%s win %f parrots\n", bet.UserName, bet.Amount*36))
+				winAmount := bet.Amount * 36
+				err := g.usersRepository.UpdateBalance(bet.User, bet.Amount+winAmount)
+				if err != nil {
+					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+					break
+				}
+				err = g.usersRepository.Save(bet.User)
+				if err != nil {
+					log.Printf("game.generate-and-settle.update-balance: %s", err.Error())
+					break
+				}
+
+				message.WriteString(
+					fmt.Sprintf(
+						"✌️ @%s win %.2f parrots. Balance: %.2f parrots.\n",
+						bet.User.UserName,
+						float64(winAmount)/100,
+						float64(bet.User.Balance)/100,
+					),
+				)
 			} else {
-				message.WriteString(fmt.Sprintf("@%s lose %f parrots\n", bet.UserName, bet.Amount))
+				message.WriteString(
+					fmt.Sprintf(
+						"😥️ @%s lose %.2f parrots. Balance: %.2f parrots.\n",
+						bet.User.UserName,
+						float64(bet.Amount)/100,
+						float64(bet.User.Balance)/100,
+					),
+				)
 			}
 		}
 	}
@@ -204,10 +356,16 @@ func (g *Game) generateAndSettle() {
 	}
 }
 
-func NewGame(api *tgbotapi.BotAPI, id uuid.UUID, chatId int64) *Game {
+func NewGame(
+	api *tgbotapi.BotAPI,
+	usersRepository repositories.UsersRepository,
+	id uuid.UUID,
+	chatId int64,
+) *Game {
 	return &Game{
-		api:    api,
-		id:     id,
-		chatId: chatId,
+		api:             api,
+		usersRepository: usersRepository,
+		id:              id,
+		chatId:          chatId,
 	}
 }

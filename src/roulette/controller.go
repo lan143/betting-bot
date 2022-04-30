@@ -2,13 +2,14 @@ package roulette
 
 import (
 	"errors"
-	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
+	"main/src/repositories"
 )
 
 type Controller struct {
-	api *tgbotapi.BotAPI
+	api             *tgbotapi.BotAPI
+	usersRepository repositories.UsersRepository
 
 	games map[uuid.UUID]*Game
 }
@@ -18,7 +19,7 @@ func (c *Controller) Init() {
 }
 
 func (c *Controller) NewGame(chatId int64) {
-	game := NewGame(c.api, uuid.New(), chatId)
+	game := NewGame(c.api, c.usersRepository, uuid.New(), chatId)
 	c.games[game.GetId()] = game
 
 	game.Init()
@@ -27,7 +28,7 @@ func (c *Controller) NewGame(chatId int64) {
 
 func (c *Controller) PlaceBet(id uuid.UUID, callback *tgbotapi.CallbackQuery, selection string) error {
 	if game, ok := c.games[id]; ok {
-		err := game.PlaceBet(callback.From.ID, callback.From.UserName, selection)
+		err := game.PlaceBet(callback.From.ID, callback.From.UserName, selection, 5.0)
 		if err != nil {
 			msg := tgbotapi.CallbackConfig{
 				CallbackQueryID: callback.ID,
@@ -39,11 +40,7 @@ func (c *Controller) PlaceBet(id uuid.UUID, callback *tgbotapi.CallbackQuery, se
 				return err
 			}
 		} else {
-			msg := tgbotapi.NewMessage(game.GetChatId(), fmt.Sprintf("%s successful place bet in %s", callback.From.UserName, selection))
-			_, err = c.api.Send(msg)
-			if err != nil {
-				return err
-			}
+
 		}
 	} else {
 		return errors.New("game not found")
@@ -52,6 +49,6 @@ func (c *Controller) PlaceBet(id uuid.UUID, callback *tgbotapi.CallbackQuery, se
 	return nil
 }
 
-func NewController(api *tgbotapi.BotAPI) *Controller {
-	return &Controller{api: api}
+func NewController(api *tgbotapi.BotAPI, usersRepository repositories.UsersRepository) *Controller {
+	return &Controller{api: api, usersRepository: usersRepository}
 }

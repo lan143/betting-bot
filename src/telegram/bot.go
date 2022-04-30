@@ -5,6 +5,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
 	"log"
+	"main/src/repositories"
 	"main/src/roulette"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ type Bot struct {
 	wg  *sync.WaitGroup
 
 	rouletteController *roulette.Controller
+	usersRepository    repositories.UsersRepository
 
 	isShutdown bool
 }
@@ -29,7 +31,7 @@ func (b *Bot) Init(ctx context.Context, wg *sync.WaitGroup, token string) error 
 		return err
 	}
 
-	b.rouletteController = roulette.NewController(b.api)
+	b.rouletteController = roulette.NewController(b.api, b.usersRepository)
 	b.rouletteController.Init()
 
 	log.Printf("bot.init: authorized on account %s", b.api.Self.UserName)
@@ -131,6 +133,6 @@ func (b *Bot) newRoulette(chatId int64) {
 	b.rouletteController.NewGame(chatId)
 }
 
-func NewBot() *Bot {
-	return &Bot{}
+func NewBot(usersRepository repositories.UsersRepository) *Bot {
+	return &Bot{usersRepository: usersRepository}
 }
